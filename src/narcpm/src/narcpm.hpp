@@ -19,6 +19,8 @@ namespace narcpm {
 		package find_package_config(const std::string& package_name);
 		void update_repository_cache();
 		void update_build_cache();
+		void write_dependencies();
+		void write_interface(std::ofstream& lists, const package& package);
 		bool exists(const std::string& package_name);
 		bool cloned(const std::string& package_name);
 		bool built(const std::string& package_name);

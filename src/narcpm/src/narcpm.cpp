@@ -7,7 +7,7 @@
 
 namespace narcpm {
 	narcpm::narcpm(const std::experimental::filesystem::path& cmake_lists_location)
-	    : _cmake_lists_location{cmake_lists_location} {
+	    : _cmake_lists_location{std::experimental::filesystem::canonical(cmake_lists_location)} {
 		if (!std::experimental::filesystem::exists(_cmake_lists_location) ||
 		    !std::experimental::filesystem::is_directory(_cmake_lists_location)) {
 			throw std::runtime_error{_cmake_lists_location.native() + " no such directory"};
@@ -25,6 +25,7 @@ namespace narcpm {
 		find_packages();
 		update_repository_cache();
 		update_build_cache();
+		write_dependencies();
 	}
 
 	void narcpm::find_packages() {
@@ -153,6 +154,31 @@ namespace narcpm {
 				std::cout << "failed" << std::endl;
 			}
 		}
+	}
+
+	void narcpm::write_dependencies() {
+		std::cout << "-- writing dependencies - ";
+		auto dependency_lists = _cmake_lists_location / "dependencies.cmake";
+		std::ofstream lists{dependency_lists, std::ofstream::trunc};
+		if (!lists) {
+			throw std::runtime_error{"could not open " + dependency_lists.native()};
+		}
+		lists << "cmake_minimum_required(VERSION 3.7 FATAL_ERROR)" << std::endl;
+		for (auto& package : _packages) {
+			if (package.interface) {
+				write_interface(lists, package);
+			}
+		}
+		std::cout << "done" << std::endl;
+	}
+
+	void narcpm::write_interface(std::ofstream& lists, const package& package) {
+		lists << std::endl;
+		lists << "add_library(" << package.name << " INTERFACE IMPORTED)" << std::endl;
+		lists << "set_property(TARGET " << package.name << " PROPERTY" << std::endl;
+		auto package_include_dir =
+		    std::experimental::filesystem::canonical(package.location / "include");
+		lists << "\tINTERFACE_INCLUDE_DIRECTORIES " << package_include_dir.native() << ")" << std::endl;
 	}
 
 	bool narcpm::exists(const std::string& package_name) {

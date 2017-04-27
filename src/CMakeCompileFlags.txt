@@ -1,0 +1,23 @@
+function(set_compile_flags)
+	if(${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
+		set(LINKED_LIBRARIES
+			${LINKED_LIBRARIES}
+			c++
+			c++abi PARENT_SCOPE)
+		set(CLANG_CXX_STD
+			-stdlib=libc++)
+	endif()
+
+	if (${CMAKE_CXX_COMPILER_ID} MATCHES "GNU")
+		 set(LINKED_LIBRARIES
+			${LINKED_LIBRARIES}
+			stdc++fs PARENT_SCOPE)
+	endif()
+
+	if (${CMAKE_CXX_COMPILER_ID} MATCHES "Clang")
+		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=unused-private-field")
+	endif()
+
+	set(CMAKE_CXX_FLAGS
+		"${CMAKE_CXX_FLAGS} ${CLANG_CXX_STD} -std=c++1z -Wall -Wextra -Werror -Wno-error=unused-variable -Wno-error=unused-parameter" PARENT_SCOPE)
+endfunction()

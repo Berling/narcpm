@@ -66,22 +66,28 @@ namespace narcpm {
 		if (!config) {
 			throw std::runtime_error{"could not open " + package_config_location.native()};
 		}
-		std::string repository;
-		if (!std::getline(config, repository)) {
-			throw std::runtime_error{package_name + ".config is empty"};
+		std::vector<std::string> lines;
+		std::string line;
+		while (std::getline(config, line)) {
+			lines.emplace_back(line);
+		}
+		if (lines.empty()) {
+			throw std::runtime_error{"config for package " + package_name + " empty"};
+		}
+		if (lines.size() > 2) {
+			throw std::runtime_error{"config for package " + package_name +
+			                         " has incorrect number of values"};
 		}
 		package package;
-		std::string interface;
-		if (!std::getline(config, interface)) {
-			throw std::runtime_error{package_name + ".config has no interface flag"};
-		}
-		package.repository = repository;
-		if (interface == "true") {
+		if (lines[0] == "true") {
 			package.interface = true;
-		} else if (interface == "false") {
+		} else if (lines[0] == "false") {
 			package.interface = false;
 		} else {
-			throw std::runtime_error{package_name + ".config has illegal value for interface flag"};
+			throw std::runtime_error{"unsupported value for interface flag in package " + package_name};
+		}
+		if (lines.size() == 2) {
+			package.repository = lines[1];
 		}
 		return package;
 	}
@@ -90,7 +96,7 @@ namespace narcpm {
 		std::cout << "-- updating repository cache" << std::endl;
 		for (auto& package : _packages) {
 			std::experimental::filesystem::path repository_location = package.location / "repository";
-			if (package.state == package::state::none) {
+			if (package.state == package::state::none && !package.repository.empty()) {
 				std::cout << "--   cloning " + package.name << std::endl;
 				std::system(
 				    ("git clone --depth 1 -q " + package.repository + " " + repository_location.native())
@@ -110,6 +116,7 @@ namespace narcpm {
 			}
 			std::cout << "--   building package " << package.name << " - ";
 			std::experimental::filesystem::path package_root = "cache/" + package.name;
+			std::experimental::filesystem::path cmake_lists = "packages/" + package.name;
 			bool successfull = false;
 			if (!package.interface) {
 				for (auto& toolchain : toolchains) {
@@ -118,20 +125,24 @@ namespace narcpm {
 					for (auto& build_type : build_types) {
 						std::experimental::filesystem::path build_type_location =
 						    toolchain_location / build_type;
-						for (auto& link_type : link_types) {
-							std::experimental::filesystem::path link_type_location =
-							    build_type_location / link_type;
-							auto exit_code = std::system("false");
-							if (exit_code != 0) {
-								successfull = false;
-							} else {
-								successfull = true;
-							}
+						std::experimental::filesystem::create_directories(build_type_location);
+						auto command = "cd " + build_type_location.native() +
+						               " && cmake -G\"Unix Makefiles\" -DCMAKE_BUILD_TYPE=" + build_type +
+						               " -DCMAKE_C_COMPILER=" + toolchain.cc +
+						               " -DCMAKE_CXX_COMPILER=" + toolchain.cxx +
+						               " -DTOOLCHAIN=" + toolchain.name + " -DPACKAGE_ROOT=" +
+						               std::experimental::filesystem::canonical(package_root).native() + " " +
+						               std::experimental::filesystem::canonical(cmake_lists).native() +
+						               " && make -j 8 && make install";
+						auto exit_code = std::system(command.c_str());
+						if (exit_code != 0) {
+							successfull = false;
+						} else {
+							successfull = true;
 						}
 					}
 				}
 			} else {
-				std::experimental::filesystem::path cmake_lists = "packages/" + package.name;
 				std::experimental::filesystem::path build_location = package_root / "build";
 				std::experimental::filesystem::create_directories(build_location);
 				auto exit_code = std::system(
@@ -164,9 +175,26 @@ namespace narcpm {
 			throw std::runtime_error{"could not open " + dependency_lists.native()};
 		}
 		lists << "cmake_minimum_required(VERSION 3.7 FATAL_ERROR)" << std::endl;
+		lists << std::endl;
+		lists << "if(${CMAKE_C_COMPILER_ID} MATCHES \"Clang\" OR ${CMAKE_CXX_COMPILER_ID} MATCHES "
+		         "\"Clang\")"
+		      << std::endl;
+		lists << "\tset(TOOLCHAIN clang)" << std::endl;
+		lists << "elseif(${CMAKE_C_COMPILER_ID} MATCHES \"GNU\" OR ${CMAKE_CXX_COMPILER_ID} MATCHES "
+		         "\"GNU\")"
+		      << std::endl;
+		lists << "\tset(TOOLCHAIN gnu)" << std::endl;
+		lists << "else()" << std::endl;
+		lists << "\tmessage(ERROR \"unrecognized toolchain cc:${CMAKE_C_COMPILER_ID} "
+		         "cxx:${CMAKE_CXX_COMPILER_ID}\")"
+		      << std::endl;
+		lists << "endif()" << std::endl;
+
 		for (auto& package : _packages) {
 			if (package.interface) {
 				write_interface(lists, package);
+			} else {
+				write_library(lists, package);
 			}
 		}
 		std::cout << "done" << std::endl;
@@ -179,6 +207,19 @@ namespace narcpm {
 		auto package_include_dir =
 		    std::experimental::filesystem::canonical(package.location / "include");
 		lists << "\tINTERFACE_INCLUDE_DIRECTORIES " << package_include_dir.native() << ")" << std::endl;
+	}
+
+	void narcpm::write_library(std::ofstream& lists, const package& package) {
+		lists << std::endl;
+		lists << "add_library(" << package.name << " STATIC IMPORTED)" << std::endl;
+		lists << "set_property(TARGET " << package.name << " PROPERTY" << std::endl;
+		auto package_include_dir =
+		    std::experimental::filesystem::canonical(package.location / "include");
+		lists << "\tINTERFACE_INCLUDE_DIRECTORIES " << package_include_dir.native() << ")" << std::endl;
+		lists << "set_property(TARGET " << package.name << " PROPERTY" << std::endl;
+		auto package_lib_dir = std::experimental::filesystem::canonical(package.location) / "lib" /
+		                       "${TOOLCHAIN}" / "${CMAKE_BUILD_TYPE}" / ("lib" + package.name + ".a");
+		lists << "\tIMPORTED_LOCATION " << package_lib_dir.generic_string() << ")" << std::endl;
 	}
 
 	bool narcpm::exists(const std::string& package_name) {

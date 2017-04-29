@@ -21,6 +21,7 @@ namespace narcpm {
 		void update_build_cache();
 		void write_dependencies();
 		void write_interface(std::ofstream& lists, const package& package);
+		void write_library(std::ofstream& lists, const package& package);
 		bool exists(const std::string& package_name);
 		bool cloned(const std::string& package_name);
 		bool built(const std::string& package_name);

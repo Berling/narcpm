@@ -37,11 +37,25 @@ namespace narcpm {
 		if (!config) {
 			throw std::runtime_error{"could not open narcpm.config"};
 		}
-		std::string package_name;
-		while (std::getline(config, package_name)) {
+		std::string package_build_config;
+		while (std::getline(config, package_build_config)) {
+			auto delimiter = package_build_config.find("::", 0);
+			auto package_name = package_build_config.substr(0, delimiter);
 			if (!exists(package_name)) {
 				continue;
 			}
+			bool build_static = true;
+			if (delimiter != std::string::npos) {
+				auto build_type = package_build_config.substr(delimiter + 2, package_build_config.size());
+				if (build_type == "static") {
+					build_static = true;
+				} else if ("shared") {
+					build_static = false;
+				} else {
+					throw std::runtime_error{"unrecognized link type"};
+				}
+			}
+			_build_types[package_name] = build_static;
 			package package = find_package_config(package_name);
 			package.name = package_name;
 			package.location = "cache/" + package_name;
@@ -218,8 +232,19 @@ namespace narcpm {
 		lists << "\tINTERFACE_INCLUDE_DIRECTORIES " << package_include_dir.native() << ")" << std::endl;
 		lists << "set_property(TARGET " << package.name << " PROPERTY" << std::endl;
 		auto package_lib_dir = std::experimental::filesystem::canonical(package.location) / "lib" /
-		                       "${TOOLCHAIN}" / "${CMAKE_BUILD_TYPE}" / ("lib" + package.name + ".a");
+		                       "${TOOLCHAIN}" / "${CMAKE_BUILD_TYPE}" / generate_library_name(package);
 		lists << "\tIMPORTED_LOCATION " << package_lib_dir.generic_string() << ")" << std::endl;
+	}
+
+	std::string narcpm::generate_library_name(const package& package) {
+		auto build_static = _build_types[package.name];
+		auto library_name = "lib" + package.name;
+		if (build_static) {
+			library_name += ".a";
+		} else {
+			library_name += ".so";
+		}
+		return library_name;
 	}
 
 	bool narcpm::exists(const std::string& package_name) {

@@ -203,6 +203,13 @@ namespace narcpm {
 		         "cxx:${CMAKE_CXX_COMPILER_ID}\")"
 		      << std::endl;
 		lists << "endif()" << std::endl;
+		lists << std::endl;
+		lists << "if(${CMAKE_BUILD_TYPE} MATCHES \"Debug\")" << std::endl;
+		lists << "\tset(RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG})" << std::endl;
+		lists << "else()" << std::endl;
+		lists << "\tset(RUNTIME_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE})"
+		      << std::endl;
+		lists << "endif()" << std::endl;
 
 		for (auto& package : _packages) {
 			if (package.interface) {
@@ -225,15 +232,20 @@ namespace narcpm {
 
 	void narcpm::write_library(std::ofstream& lists, const package& package) {
 		lists << std::endl;
-		lists << "add_library(" << package.name << " STATIC IMPORTED)" << std::endl;
+		lists << "add_library(" << package.name << " " << library_type(package) << " IMPORTED)"
+		      << std::endl;
 		lists << "set_property(TARGET " << package.name << " PROPERTY" << std::endl;
 		auto package_include_dir =
 		    std::experimental::filesystem::canonical(package.location / "include");
 		lists << "\tINTERFACE_INCLUDE_DIRECTORIES " << package_include_dir.native() << ")" << std::endl;
 		lists << "set_property(TARGET " << package.name << " PROPERTY" << std::endl;
-		auto package_lib_dir = std::experimental::filesystem::canonical(package.location) / "lib" /
-		                       "${TOOLCHAIN}" / "${CMAKE_BUILD_TYPE}" / generate_library_name(package);
-		lists << "\tIMPORTED_LOCATION " << package_lib_dir.generic_string() << ")" << std::endl;
+		lists << "\tIMPORTED_LOCATION " << generate_library_path(package) << ")" << std::endl;
+		if (!_build_types[package.name]) {
+			lists << "execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different "
+			      << std::experimental::filesystem::canonical(package.location) / "lib" / "${TOOLCHAIN}" /
+			             "${CMAKE_BUILD_TYPE}" / generate_library_name(package)
+			      << " ${RUNTIME_OUTPUT_DIRECTORY})" << std::endl;
+		}
 	}
 
 	std::string narcpm::generate_library_name(const package& package) {
@@ -245,6 +257,27 @@ namespace narcpm {
 			library_name += ".so";
 		}
 		return library_name;
+	}
+
+	std::string narcpm::library_type(const package& package) {
+		auto build_static = _build_types[package.name];
+		if (build_static) {
+			return "STATIC";
+		} else {
+			return "SHARED";
+		}
+	}
+
+	std::string narcpm::generate_library_path(const package& package) {
+		auto build_static = _build_types[package.name];
+		auto lib_name = generate_library_name(package);
+		if (build_static) {
+			return std::experimental::filesystem::canonical(package.location) / "lib" / "${TOOLCHAIN}" /
+			       "${CMAKE_BUILD_TYPE}" / generate_library_name(package);
+
+		} else {
+			return "${RUNTIME_OUTPUT_DIRECTORY}/" + lib_name;
+		}
 	}
 
 	bool narcpm::exists(const std::string& package_name) {

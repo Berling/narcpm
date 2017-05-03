@@ -10,6 +10,7 @@ namespace narcpm {
 		struct section {
 			std::string name;
 			std::unordered_map<std::string, std::string> key_value_pairs;
+			std::unordered_map<std::string, std::shared_ptr<section>> subsections;
 		};
 
 		std::unordered_map<std::string, section> _sections;
@@ -39,7 +40,9 @@ namespace narcpm {
 
 	private:
 		section parse_section(std::ifstream& config);
+		section parse_subsection(std::ifstream& config);
 		std::string parse_section_head(const std::string& line);
+		std::string parse_subsection_head(const std::string& line);
 		std::pair<std::string, std::string> parse_key_value_pair(const std::string& line);
 	};
 }

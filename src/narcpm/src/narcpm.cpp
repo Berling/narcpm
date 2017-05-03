@@ -24,50 +24,51 @@ namespace narcpm {
 			std::system("cd packages && git pull -q");
 		}
 
+		find_imports();
 		find_packages();
 		update_repository_cache();
 		update_build_cache();
 		write_dependencies();
 	}
 
-	void narcpm::find_packages() {
+	void narcpm::find_imports() {
 		std::experimental::filesystem::path config_location = _cmake_lists_location / "narcpm.config";
-		if (!std::experimental::filesystem::exists(config_location)) {
-			throw std::runtime_error{"no narcpm.config found in " + _cmake_lists_location.native()};
+		config import_config{config_location};
+		for (auto& import_config_entry : import_config) {
+			auto& import_config = import_config_entry.second;
+			import import;
+			import.name = import_config_entry.first;
+			auto link_static_iter = import_config.key_value_pairs.find("static");
+			if (link_static_iter != import_config.key_value_pairs.end()) {
+				import.link_static = to_bool(link_static_iter->second);
+			}
+			for (auto& subpackage_config_entry : import_config.subsections) {
+				auto& subpackage_config = *subpackage_config_entry.second;
+				struct import subimport;
+				subimport.name = subpackage_config_entry.first;
+				auto link_static_iter = subpackage_config.key_value_pairs.find("static");
+				if (link_static_iter != import_config.key_value_pairs.end()) {
+					subimport.link_static = to_bool(link_static_iter->second);
+				}
+				import.subpackages.emplace_back(subimport);
+			}
+			_imports.emplace_back(import);
 		}
-		std::ifstream config{config_location};
-		if (!config) {
-			throw std::runtime_error{"could not open narcpm.config"};
-		}
-		std::string package_build_config;
-		while (std::getline(config, package_build_config)) {
-			auto delimiter = package_build_config.find("::", 0);
-			auto package_name = package_build_config.substr(0, delimiter);
-			if (!exists(package_name)) {
+	}
+
+	void narcpm::find_packages() {
+		for (auto& import : _imports) {
+			package package = find_package_config(import.name);
+			if (!exists(package.name)) {
 				continue;
 			}
-			bool build_static = true;
-			if (delimiter != std::string::npos) {
-				auto build_type = package_build_config.substr(delimiter + 2, package_build_config.size());
-				if (build_type == "static") {
-					build_static = true;
-				} else if ("shared") {
-					build_static = false;
-				} else {
-					throw std::runtime_error{"unrecognized link type"};
-				}
-			}
-			_build_types[package_name] = build_static;
-			package package = find_package_config(package_name);
-			package.name = package_name;
-			package.location = "cache/" + package_name;
-			if (cloned(package_name)) {
+			if (cloned(import.name)) {
 				package.state = package::state::cloned;
 			}
-			if (built(package_name)) {
+			if (built(import.name)) {
 				package.state = package::state::built;
 			}
-			_packages.emplace_back(package);
+			_packages[package.name] = package;
 		}
 	}
 
@@ -93,7 +94,7 @@ namespace narcpm {
 				if (interface != section.key_value_pairs.end()) {
 					subpackage.interface = to_bool(interface->second);
 				}
-				pack.sub_packages[subpackage.name] = std::make_shared<package>(subpackage);
+				pack.sub_packages[section.name] = std::make_shared<package>(subpackage);
 			}
 		}
 		auto repository = package_section.key_value_pairs.find("repository");
@@ -110,7 +111,8 @@ namespace narcpm {
 
 	void narcpm::update_repository_cache() {
 		std::cout << "-- updating repository cache" << std::endl;
-		for (auto& package : _packages) {
+		for (auto& package_entry : _packages) {
+			auto& package = package_entry.second;
 			std::experimental::filesystem::path repository_location = package.location / "repository";
 			if (package.state == package::state::none && !package.repository.empty()) {
 				std::cout << "--   cloning " + package.name << std::endl;
@@ -126,7 +128,8 @@ namespace narcpm {
 		std::vector<toolchain> toolchains = {{"clang", "clang", "clang++"}, {"gcc", "gcc", "g++"}};
 		std::vector<std::string> build_types = {"Debug", "Release"};
 		std::vector<std::string> link_types = {"static", "shared"};
-		for (auto& package : _packages) {
+		for (auto& package_entry : _packages) {
+			auto& package = package_entry.second;
 			if (package.state == package::state::built) {
 				continue;
 			}
@@ -196,20 +199,21 @@ namespace narcpm {
 		      << std::endl;
 		lists << "endif()" << std::endl;
 
-		for (auto& package : _packages) {
-			if (package.sub_packages.empty()) {
+		for (auto& import : _imports) {
+			auto& package = _packages[import.name];
+			if (import.subpackages.empty()) {
 				if (package.interface) {
 					write_interface(lists, package);
 				} else {
-					write_library(lists, package);
+					write_library(lists, import, package);
 				}
 			} else {
-				for (auto& sub_package_entry : package.sub_packages) {
-					auto& sub_package = *sub_package_entry.second;
-					if (sub_package.interface) {
-						write_interface(lists, sub_package);
+				for (auto& subimport : import.subpackages) {
+					auto& subpackage = *package.sub_packages[subimport.name];
+					if (subpackage.interface) {
+						write_interface(lists, subpackage);
 					} else {
-						write_library(lists, sub_package);
+						write_library(lists, subimport, subpackage);
 					}
 				}
 			}
@@ -226,28 +230,28 @@ namespace narcpm {
 		lists << "\tINTERFACE_INCLUDE_DIRECTORIES " << package_include_dir.native() << ")" << std::endl;
 	}
 
-	void narcpm::write_library(std::ofstream& lists, const package& package) {
+	void narcpm::write_library(std::ofstream& lists, const import& import, const package& package) {
 		lists << std::endl;
-		lists << "add_library(" << package.name << " " << library_type(package) << " IMPORTED)"
+		lists << "add_library(" << package.name << " " << library_type(import) << " IMPORTED)"
 		      << std::endl;
 		lists << "set_property(TARGET " << package.name << " PROPERTY" << std::endl;
 		auto package_include_dir =
 		    std::experimental::filesystem::canonical(package.location / "include");
 		lists << "\tINTERFACE_INCLUDE_DIRECTORIES " << package_include_dir.native() << ")" << std::endl;
 		lists << "set_property(TARGET " << package.name << " PROPERTY" << std::endl;
-		lists << "\tIMPORTED_LOCATION " << generate_library_path(package) << ")" << std::endl;
-		if (!_build_types[package.name]) {
+		lists << "\tIMPORTED_LOCATION " << generate_library_path(import, package) << ")" << std::endl;
+		if (!import.link_static) {
 			lists << "execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different "
 			      << std::experimental::filesystem::canonical(package.location) / "lib" / "${TOOLCHAIN}" /
-			             "${CMAKE_BUILD_TYPE}" / generate_library_name(package)
-			      << " ${RUNTIME_OUTPUT_DIRECTORY}/" + generate_library_name(package) << ")" << std::endl;
+			             "${CMAKE_BUILD_TYPE}" / generate_library_name(import, package)
+			      << " ${RUNTIME_OUTPUT_DIRECTORY}/" + generate_library_name(import, package) << ")"
+			      << std::endl;
 		}
 	}
 
-	std::string narcpm::generate_library_name(const package& package) {
-		auto build_static = _build_types[package.name];
+	std::string narcpm::generate_library_name(const import& import, const package& package) {
 		auto library_name = "lib" + package.name;
-		if (build_static) {
+		if (import.link_static) {
 			library_name += ".a";
 		} else {
 			library_name += ".so";
@@ -255,21 +259,19 @@ namespace narcpm {
 		return library_name;
 	}
 
-	std::string narcpm::library_type(const package& package) {
-		auto build_static = _build_types[package.name];
-		if (build_static) {
+	std::string narcpm::library_type(const import& import) {
+		if (import.link_static) {
 			return "STATIC";
 		} else {
 			return "SHARED";
 		}
 	}
 
-	std::string narcpm::generate_library_path(const package& package) {
-		auto build_static = _build_types[package.name];
-		auto lib_name = generate_library_name(package);
-		if (build_static) {
+	std::string narcpm::generate_library_path(const import& import, const package& package) {
+		auto lib_name = generate_library_name(import, package);
+		if (import.link_static) {
 			return std::experimental::filesystem::canonical(package.location) / "lib" / "${TOOLCHAIN}" /
-			       "${CMAKE_BUILD_TYPE}" / generate_library_name(package);
+			       "${CMAKE_BUILD_TYPE}" / generate_library_name(import, package);
 
 		} else {
 			return "${RUNTIME_OUTPUT_DIRECTORY}/" + lib_name;

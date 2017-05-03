@@ -1,4 +1,7 @@
 #include <fstream>
+#include <iostream>
+#include <memory>
+#include <string>
 
 #include "config.hpp"
 #include "util.hpp"
@@ -27,7 +30,27 @@ namespace narcpm {
 		std::getline(config, line);
 		section section;
 		section.name = parse_section_head(line);
-		while (!config.eof() && config.peek() != '[' && std::getline(config, line)) {
+		while (!config.eof() && config.peek() != '[') {
+			if (config.peek() == '<') {
+				auto subsection = parse_subsection(config);
+				section.subsections[subsection.name] = std::make_shared<config::section>(subsection);
+			} else {
+				if (!std::getline(config, line)) {
+					break;
+				}
+				section.key_value_pairs.insert(parse_key_value_pair(line));
+			}
+		}
+		return section;
+	}
+
+	config::section config::parse_subsection(std::ifstream& config) {
+		std::string line;
+		std::getline(config, line);
+		section section;
+		section.name = parse_subsection_head(line);
+		while (!config.eof() && config.peek() != '[' && config.peek() != '<' &&
+		       std::getline(config, line)) {
 			section.key_value_pairs.insert(parse_key_value_pair(line));
 		}
 		return section;
@@ -35,6 +58,14 @@ namespace narcpm {
 
 	std::string config::parse_section_head(const std::string& line) {
 		auto delim = line.find(']');
+		if (delim == std::string::npos) {
+			throw std::runtime_error{"missing section delimiter"};
+		}
+		return line.substr(1, delim - 1);
+	}
+
+	std::string config::parse_subsection_head(const std::string& line) {
+		auto delim = line.find('>');
 		if (delim == std::string::npos) {
 			throw std::runtime_error{"missing section delimiter"};
 		}

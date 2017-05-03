@@ -3,6 +3,7 @@
 #include <experimental/filesystem>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace narcpm {
 	struct package {
@@ -14,5 +15,11 @@ namespace narcpm {
 		std::experimental::filesystem::path location;
 		state state = state::none;
 		std::unordered_map<std::string, std::shared_ptr<package>> sub_packages;
+	};
+
+	struct import {
+		std::string name;
+		bool link_static = true;
+		std::vector<import> subpackages;
 	};
 }

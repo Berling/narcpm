@@ -2,8 +2,10 @@
 #include <fstream>
 #include <iostream>
 
+#include "config.hpp"
 #include "narcpm.hpp"
 #include "toolchain.hpp"
+#include "util.hpp"
 
 namespace narcpm {
 	narcpm::narcpm(const std::experimental::filesystem::path& cmake_lists_location)
@@ -72,38 +74,38 @@ namespace narcpm {
 	package narcpm::find_package_config(const std::string& package_name) {
 		std::experimental::filesystem::path package_config_location{"packages/" + package_name + "/" +
 		                                                            package_name + ".config"};
-		if (!std::experimental::filesystem::exists(package_config_location) ||
-		    !std::experimental::filesystem::is_regular_file(package_config_location)) {
-			throw std::runtime_error{"no config found for package " + package_name};
+		config config{package_config_location};
+		package pack;
+		auto package_section_iter = config.find("package");
+		if (package_section_iter == config.end()) {
+			throw std::runtime_error{"no package section found"};
 		}
-		std::ifstream config{package_config_location};
-		if (!config) {
-			throw std::runtime_error{"could not open " + package_config_location.native()};
+		auto& package_section = package_section_iter->second;
+		pack.name = package_name;
+		pack.location = std::experimental::filesystem::path{"cache"} / pack.name;
+		for (auto& section_pair : config) {
+			if (section_pair.first != "package") {
+				auto& section = section_pair.second;
+				package subpackage;
+				subpackage.name = pack.name + "_" + section.name;
+				subpackage.location = pack.location;
+				auto interface = section.key_value_pairs.find("interface");
+				if (interface != section.key_value_pairs.end()) {
+					subpackage.interface = to_bool(interface->second);
+				}
+				pack.sub_packages[subpackage.name] = std::make_shared<package>(subpackage);
+			}
 		}
-		std::vector<std::string> lines;
-		std::string line;
-		while (std::getline(config, line)) {
-			lines.emplace_back(line);
+		auto repository = package_section.key_value_pairs.find("repository");
+		if (repository != package_section.key_value_pairs.end()) {
+			pack.repository = repository->second;
 		}
-		if (lines.empty()) {
-			throw std::runtime_error{"config for package " + package_name + " empty"};
+		auto interface = package_section.key_value_pairs.find("interface");
+		if (interface != package_section.key_value_pairs.end()) {
+			pack.interface = to_bool(interface->second);
 		}
-		if (lines.size() > 2) {
-			throw std::runtime_error{"config for package " + package_name +
-			                         " has incorrect number of values"};
-		}
-		package package;
-		if (lines[0] == "true") {
-			package.interface = true;
-		} else if (lines[0] == "false") {
-			package.interface = false;
-		} else {
-			throw std::runtime_error{"unsupported value for interface flag in package " + package_name};
-		}
-		if (lines.size() == 2) {
-			package.repository = lines[1];
-		}
-		return package;
+
+		return pack;
 	}
 
 	void narcpm::update_repository_cache() {
@@ -121,7 +123,7 @@ namespace narcpm {
 
 	void narcpm::update_build_cache() {
 		std::cout << "-- updating build cache" << std::endl;
-		std::vector<toolchain> toolchains = {{"clang", "clang", "clang++"}, {"gnu", "gcc", "g++"}};
+		std::vector<toolchain> toolchains = {{"clang", "clang", "clang++"}, {"gcc", "gcc", "g++"}};
 		std::vector<std::string> build_types = {"Debug", "Release"};
 		std::vector<std::string> link_types = {"static", "shared"};
 		for (auto& package : _packages) {
@@ -132,43 +134,26 @@ namespace narcpm {
 			std::experimental::filesystem::path package_root = "cache/" + package.name;
 			std::experimental::filesystem::path cmake_lists = "packages/" + package.name;
 			bool successfull = false;
-			if (!package.interface) {
-				for (auto& toolchain : toolchains) {
-					std::experimental::filesystem::path toolchain_location =
-					    package_root / "build" / toolchain.name;
-					for (auto& build_type : build_types) {
-						std::experimental::filesystem::path build_type_location =
-						    toolchain_location / build_type;
-						std::experimental::filesystem::create_directories(build_type_location);
-						auto command = "cd " + build_type_location.native() +
-						               " && cmake -G\"Unix Makefiles\" -DCMAKE_BUILD_TYPE=" + build_type +
-						               " -DCMAKE_C_COMPILER=" + toolchain.cc +
-						               " -DCMAKE_CXX_COMPILER=" + toolchain.cxx +
-						               " -DTOOLCHAIN=" + toolchain.name + " -DPACKAGE_ROOT=" +
-						               std::experimental::filesystem::canonical(package_root).native() + " " +
-						               std::experimental::filesystem::canonical(cmake_lists).native() +
-						               " && make -j 8 && make install";
-						auto exit_code = std::system(command.c_str());
-						if (exit_code != 0) {
-							successfull = false;
-						} else {
-							successfull = true;
-						}
+			for (auto& toolchain : toolchains) {
+				std::experimental::filesystem::path toolchain_location =
+				    package_root / "build" / toolchain.name;
+				for (auto& build_type : build_types) {
+					std::experimental::filesystem::path build_type_location = toolchain_location / build_type;
+					std::experimental::filesystem::create_directories(build_type_location);
+					auto command =
+					    "cd " + build_type_location.native() +
+					    " && cmake -G\"Unix Makefiles\" -DCMAKE_BUILD_TYPE=" + build_type +
+					    " -DCMAKE_C_COMPILER=" + toolchain.cc + " -DCMAKE_CXX_COMPILER=" + toolchain.cxx +
+					    " -DTOOLCHAIN=" + toolchain.name +
+					    " -DPACKAGE_ROOT=" + std::experimental::filesystem::canonical(package_root).native() +
+					    " " + std::experimental::filesystem::canonical(cmake_lists).native() +
+					    " && make -j 8 && make install";
+					auto exit_code = std::system(command.c_str());
+					if (exit_code != 0) {
+						throw std::runtime_error{"could not build package " + package.name};
+					} else {
+						successfull = true;
 					}
-				}
-			} else {
-				std::experimental::filesystem::path build_location = package_root / "build";
-				std::experimental::filesystem::create_directories(build_location);
-				auto exit_code = std::system(
-				    ("cd " + build_location.native() + " && cmake -G\"Unix Makefiles\" -DPACKAGE_ROOT=" +
-				     std::experimental::filesystem::canonical(package_root).native() + " " +
-				     std::experimental::filesystem::canonical(cmake_lists).native() +
-				     " && make install -j 8")
-				        .c_str());
-				if (exit_code != 0) {
-					successfull = false;
-				} else {
-					successfull = true;
 				}
 			}
 			if (successfull) {
@@ -212,10 +197,21 @@ namespace narcpm {
 		lists << "endif()" << std::endl;
 
 		for (auto& package : _packages) {
-			if (package.interface) {
-				write_interface(lists, package);
+			if (package.sub_packages.empty()) {
+				if (package.interface) {
+					write_interface(lists, package);
+				} else {
+					write_library(lists, package);
+				}
 			} else {
-				write_library(lists, package);
+				for (auto& sub_package_entry : package.sub_packages) {
+					auto& sub_package = *sub_package_entry.second;
+					if (sub_package.interface) {
+						write_interface(lists, sub_package);
+					} else {
+						write_library(lists, sub_package);
+					}
+				}
 			}
 		}
 		std::cout << "done" << std::endl;
@@ -244,7 +240,7 @@ namespace narcpm {
 			lists << "execute_process(COMMAND ${CMAKE_COMMAND} -E copy_if_different "
 			      << std::experimental::filesystem::canonical(package.location) / "lib" / "${TOOLCHAIN}" /
 			             "${CMAKE_BUILD_TYPE}" / generate_library_name(package)
-			      << " ${RUNTIME_OUTPUT_DIRECTORY})" << std::endl;
+			      << " ${RUNTIME_OUTPUT_DIRECTORY}/" + generate_library_name(package) << ")" << std::endl;
 		}
 	}
 

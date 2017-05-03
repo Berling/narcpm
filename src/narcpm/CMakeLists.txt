@@ -15,6 +15,6 @@ target_link_libraries(narcpm
 	${LINKED_LIBRARIES})
 
 install(TARGETS narcpm EXPORT narcpm
-	RUNTIME DESTINATION ${CMAKE_SOURCE_DIR}/../../narcpm_instal/)
+	RUNTIME DESTINATION ${CMAKE_SOURCE_DIR}/../../narcpm_install/)
 
 export(TARGETS narcpm FILE narcpm.cmake)

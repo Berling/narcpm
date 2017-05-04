@@ -209,6 +209,10 @@ namespace narcpm {
 				}
 			} else {
 				for (auto& subimport : import.subpackages) {
+					if (!package.sub_packages[subimport.name]) {
+						throw std::runtime_error{"could not find subpackage " + import.name + " " +
+						                         subimport.name};
+					}
 					auto& subpackage = *package.sub_packages[subimport.name];
 					if (subpackage.interface) {
 						write_interface(lists, subpackage);

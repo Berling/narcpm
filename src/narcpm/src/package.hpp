@@ -11,6 +11,7 @@ namespace narcpm {
 
 		std::string name;
 		std::string repository;
+		std::string commit;
 		bool interface = false;
 		std::experimental::filesystem::path location;
 		state state = state::none;

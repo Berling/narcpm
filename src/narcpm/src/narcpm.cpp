@@ -101,6 +101,10 @@ namespace narcpm {
 		if (repository != package_section.key_value_pairs.end()) {
 			pack.repository = repository->second;
 		}
+		auto commit = package_section.key_value_pairs.find("commit");
+		if (commit != package_section.key_value_pairs.end()) {
+			pack.commit = commit->second;
+		}
 		auto interface = package_section.key_value_pairs.find("interface");
 		if (interface != package_section.key_value_pairs.end()) {
 			pack.interface = to_bool(interface->second);
@@ -116,9 +120,18 @@ namespace narcpm {
 			std::experimental::filesystem::path repository_location = package.location / "repository";
 			if (package.state == package::state::none && !package.repository.empty()) {
 				std::cout << "--   cloning " + package.name << std::endl;
-				std::system(
-				    ("git clone --depth 1 -q " + package.repository + " " + repository_location.native())
-				        .c_str());
+				std::string depth;
+				std::string checkout;
+				if (!package.commit.empty()) {
+					checkout =
+					    " && cd " + repository_location.native() + " && git checkout " + package.commit;
+				} else {
+					depth = "--depth 1";
+				}
+				std::string clone = "git clone " + depth + " -q " + package.repository + " " +
+				                    repository_location.native() + checkout;
+				std::cout << clone << std::endl;
+				std::system(clone.c_str());
 			}
 		}
 	}

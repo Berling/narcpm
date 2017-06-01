@@ -8,15 +8,21 @@
 
 namespace narcpm {
 	class narcpm {
+	public:
+		enum class mode { init, run };
+
 	private:
 		std::vector<import> _imports;
 		std::unordered_map<std::string, package> _packages;
+		std::experimental::filesystem::path _narcpm_location;
 		std::experimental::filesystem::path _cmake_lists_location;
+		mode _mode;
 
 	public:
-		narcpm(const std::experimental::filesystem::path& cmake_lists_location);
+		narcpm(const std::experimental::filesystem::path& cmake_lists_location, mode mode);
 
 	private:
+		void configure_project();
 		void find_imports();
 		void find_packages();
 		package find_package_config(const std::string& package_name);

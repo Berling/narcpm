@@ -8,12 +8,15 @@
 #include "util.hpp"
 
 namespace narcpm {
-	narcpm::narcpm(const std::experimental::filesystem::path& cmake_lists_location)
-	    : _cmake_lists_location{std::experimental::filesystem::canonical(cmake_lists_location)} {
+	narcpm::narcpm(const std::experimental::filesystem::path& cmake_lists_location, mode mode)
+	    : _cmake_lists_location{std::experimental::filesystem::canonical(cmake_lists_location)},
+	      _mode{mode} {
 		if (!std::experimental::filesystem::exists(_cmake_lists_location) ||
 		    !std::experimental::filesystem::is_directory(_cmake_lists_location)) {
 			throw std::runtime_error{_cmake_lists_location.native() + " no such directory"};
 		}
+
+		_narcpm_location = std::experimental::filesystem::canonical(_narcpm_location);
 
 		if (!std::experimental::filesystem::exists("packages") ||
 		    !std::experimental::filesystem::is_directory("packages")) {
@@ -24,11 +27,29 @@ namespace narcpm {
 			std::system("cd packages && git pull -q");
 		}
 
-		find_imports();
-		find_packages();
-		update_repository_cache();
-		update_build_cache();
-		write_dependencies();
+		if (mode == mode::init) {
+			configure_project();
+		} else if (mode == mode::run) {
+			find_imports();
+			find_packages();
+			update_repository_cache();
+			update_build_cache();
+			write_dependencies();
+		}
+	}
+
+	void narcpm::configure_project() {
+		auto narcpm_cmake_location = _cmake_lists_location / "narcpm.cmake";
+		std::ofstream narcpm_cmake{narcpm_cmake_location, std::ofstream::trunc};
+		if (!narcpm_cmake) {
+			throw std::runtime_error{"could not open " + narcpm_cmake_location.native()};
+		}
+		std::experimental::filesystem::path narcpm_location{"narcpm"};
+		narcpm_location = std::experimental::filesystem::canonical(narcpm_location);
+		narcpm_cmake << "execute_process(COMMAND ${CMAKE_COMMAND} -E chdir "
+		             << narcpm_location.parent_path().native() << " " << narcpm_location.native()
+		             << " --run " << _cmake_lists_location.native() << ")" << std::endl;
+		auto clang_complete_location = _cmake_lists_location / ".clang-complete";
 	}
 
 	void narcpm::find_imports() {
@@ -41,6 +62,10 @@ namespace narcpm {
 			auto link_static_iter = import_config.key_value_pairs.find("static");
 			if (link_static_iter != import_config.key_value_pairs.end()) {
 				import.link_static = to_bool(link_static_iter->second);
+			}
+			auto update_iter = import_config.key_value_pairs.find("update");
+			if (update_iter != import_config.key_value_pairs.end()) {
+				import.update = to_bool(update_iter->second);
 			}
 			for (auto& subpackage_config_entry : import_config.subsections) {
 				auto& subpackage_config = *subpackage_config_entry.second;
@@ -83,7 +108,7 @@ namespace narcpm {
 		}
 		auto& package_section = package_section_iter->second;
 		pack.name = package_name;
-		pack.location = std::experimental::filesystem::path{"cache"} / pack.name;
+		pack.location = _narcpm_location / std::experimental::filesystem::path{"cache"} / pack.name;
 		for (auto& section_pair : config) {
 			if (section_pair.first != "package") {
 				auto& section = section_pair.second;
@@ -119,7 +144,7 @@ namespace narcpm {
 			auto& package = package_entry.second;
 			std::experimental::filesystem::path repository_location = package.location / "repository";
 			if (package.state == package::state::none && !package.repository.empty()) {
-				std::cout << "--   cloning " + package.name << std::endl;
+				std::cout << "--   cloning " << package.name << std::endl;
 				std::string depth;
 				std::string checkout;
 				if (!package.commit.empty()) {
@@ -130,8 +155,14 @@ namespace narcpm {
 				}
 				std::string clone = "git clone " + depth + " -q " + package.repository + " " +
 				                    repository_location.native() + checkout;
-				std::cout << clone << std::endl;
 				std::system(clone.c_str());
+			} else if (package.state != package::state::none && !package.repository.empty()) {
+				std::cout << "--   update " << package.name << std::endl;
+				std::string update = "cd " + repository_location.native() + " && git pull";
+				auto result = std::system(update.c_str());
+				if (result) {
+					std::experimental::filesystem::remove(package.location / "build");
+				}
 			}
 		}
 	}
@@ -198,7 +229,7 @@ namespace narcpm {
 		lists << "elseif(${CMAKE_C_COMPILER_ID} MATCHES \"GNU\" OR ${CMAKE_CXX_COMPILER_ID} MATCHES "
 		         "\"GNU\")"
 		      << std::endl;
-		lists << "\tset(TOOLCHAIN gnu)" << std::endl;
+		lists << "\tset(TOOLCHAIN gcc)" << std::endl;
 		lists << "else()" << std::endl;
 		lists << "\tmessage(ERROR \"unrecognized toolchain cc:${CMAKE_C_COMPILER_ID} "
 		         "cxx:${CMAKE_CXX_COMPILER_ID}\")"

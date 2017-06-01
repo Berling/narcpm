@@ -21,6 +21,7 @@ namespace narcpm {
 	struct import {
 		std::string name;
 		bool link_static = true;
+		bool update = false;
 		std::vector<import> subpackages;
 	};
 }
